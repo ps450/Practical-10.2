@@ -1,0 +1,585 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import {
+    getAuth,
+    onAuthStateChanged,
+    createUserWithEmailAndPassword,
+    signInWithEmailAndPassword,
+    signOut
+} from 'firebase/auth';
+import {
+    getFirestore,
+    collection,
+    doc,
+    addDoc,
+    onSnapshot,
+    updateDoc,
+    deleteDoc,
+    Timestamp,
+    setLogLevel
+} from 'firebase/firestore';
+import { Home, LogIn, LogOut, Plus, Trash2, Edit, Send, User, Key, Mail, X } from 'lucide-react';
+
+// --- Firebase Configuration ---
+// These variables are expected to be injected by the environment.
+const firebaseConfig = JSON.parse(
+    typeof __firebase_config !== 'undefined'
+        ? __firebase_config
+        : '{"apiKey":"YOUR_FALLBACK_API_KEY","authDomain":"YOUR_FALLBACK_AUTH_DOMAIN","projectId":"YOUR_FALLBACK_PROJECT_ID","storageBucket":"YOUR_FALLBACK_STORAGE_BUCKET","messagingSenderId":"YOUR_FALLBACK_SENDER_ID","appId":"YOUR_FALLBACK_APP_ID"}'
+);
+
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-blog-app';
+
+// --- Initialize Firebase ---
+// We'll initialize and store db/auth in state to ensure they are ready.
+let app;
+try {
+    app = initializeApp(firebaseConfig);
+} catch (e) {
+    console.error("Firebase initialization error:", e);
+}
+
+// --- Helper Functions & Constants ---
+const PATHS = {
+    posts: `/artifacts/${appId}/public/data/posts`,
+    comments: (postId) => `/artifacts/${appId}/public/data/posts/${postId}/comments`,
+    post: (postId) => `/artifacts/${appId}/public/data/posts/${postId}`,
+};
+
+// --- Reusable UI Components ---
+
+const Button = ({ children, onClick, variant = 'primary', className = '', ...props }) => {
+    const baseStyle = 'px-4 py-2 rounded-lg font-semibold shadow-sm transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-offset-2 flex items-center justify-center gap-2 disabled:opacity-50';
+    const variants = {
+        primary: 'bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-500',
+        secondary: 'bg-gray-200 text-gray-800 hover:bg-gray-300 focus:ring-gray-400',
+        danger: 'bg-red-600 text-white hover:bg-red-700 focus:ring-red-500',
+        ghost: 'bg-transparent text-gray-700 hover:bg-gray-100',
+    };
+    return (
+        <button
+            onClick={onClick}
+            className={`${baseStyle} ${variants[variant]} ${className}`}
+            {...props}
+        >
+            {children}
+        </button>
+    );
+};
+
+const Input = ({ type = 'text', placeholder, value, onChange, icon, ...props }) => (
+    <div className="relative w-full">
+        {icon && <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">{icon}</div>}
+        <input
+            type={type}
+            placeholder={placeholder}
+            value={value}
+            onChange={onChange}
+            className={`w-full px-4 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 ${icon ? 'pl-10' : ''}`}
+            {...props}
+        />
+    </div>
+);
+
+const TextArea = ({ placeholder, value, onChange, ...props }) => (
+    <textarea
+        placeholder={placeholder}
+        value={value}
+        onChange={onChange}
+        className="w-full h-40 px-4 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
+        {...props}
+    />
+);
+
+const Card = ({ children, className = '', ...props }) => (
+    <div
+        className={`bg-white rounded-xl shadow-md overflow-hidden ${className}`}
+        {...props}
+    >
+        {children}
+    </div>
+);
+
+const Spinner = () => (
+    <div className="flex justify-center items-center h-full">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+    </div>
+);
+
+// --- Page Components ---
+
+const AuthPage = ({ auth }) => {
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [isSignUp, setIsSignUp] = useState(false);
+    const [error, setError] = useState(null);
+    const [loading, setLoading] = useState(false);
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        setError(null);
+        setLoading(true);
+        try {
+            if (isSignUp) {
+                await createUserWithEmailAndPassword(auth, email, password);
+            } else {
+                await signInWithEmailAndPassword(auth, email, password);
+            }
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="flex items-center justify-center min-h-screen bg-gray-50">
+            <Card className="w-full max-w-md p-8 m-4">
+                <h2 className="text-3xl font-bold text-center text-gray-800 mb-6">
+                    {isSignUp ? 'Create Account' : 'Welcome Back'}
+                </h2>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <Input
+                        type="email"
+                        placeholder="Email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        icon={<Mail size={18} />}
+                        required
+                    />
+                    <Input
+                        type="password"
+                        placeholder="Password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        icon={<Key size={18} />}
+                        required
+                    />
+                    {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+                    <Button type="submit" variant="primary" className="w-full" disabled={loading}>
+                        {loading ? <Spinner /> : (isSignUp ? 'Sign Up' : 'Login')}
+                    </Button>
+                </form>
+                <button
+                    onClick={() => setIsSignUp(!isSignUp)}
+                    className="w-full text-center text-sm text-blue-600 hover:underline mt-6"
+                >
+                    {isSignUp ? 'Already have an account? Login' : "Don't have an account? Sign Up"}
+                </button>
+            </Card>
+        </div>
+    );
+};
+
+const Navbar = ({ user, auth, setPage, setCurrentPost }) => {
+    const handleLogout = async () => {
+        await signOut(auth);
+        setPage('feed'); // Go to feed after logout (app will redirect to auth)
+    };
+
+    return (
+        <nav className="bg-white shadow-md fixed top-0 left-0 right-0 z-10">
+            <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div className="flex justify-between items-center h-16">
+                    <button
+                        onClick={() => { setPage('feed'); setCurrentPost(null); }}
+                        className="text-2xl font-bold text-blue-600"
+                    >
+                        Blog Platform
+                    </button>
+                    <div className="flex items-center space-x-4">
+                        <Button
+                            variant="ghost"
+                            onClick={() => { setPage('feed'); setCurrentPost(null); }}
+                        >
+                            <Home size={20} />
+                            <span className="hidden sm:inline ml-2">Home</span>
+                        </Button>
+                        {user && (
+                            <Button
+                                variant="primary"
+                                onClick={() => { setPage('create'); setCurrentPost(null); }}
+                            >
+                                <Plus size={20} />
+                                <span className="hidden sm:inline ml-2">New Post</span>
+                            </Button>
+                        )}
+                        {user ? (
+                            <div className="flex items-center space-x-4">
+                                <span className="text-gray-700 hidden md:inline">{user.email}</span>
+                                <Button variant="secondary" onClick={handleLogout}>
+                                    <LogOut size={20} />
+                                </Button>
+                            </div>
+                        ) : (
+                            <Button variant="primary" onClick={() => setPage('auth')}>
+                                <LogIn size={20} />
+                                <span className="ml-2">Login</span>
+                            </Button>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </nav>
+    );
+};
+
+const BlogFeed = ({ posts, setPage, setCurrentPost, loading }) => {
+    if (loading) return <Spinner />;
+    if (posts.length === 0) {
+        return <p className="text-center text-gray-500 mt-8">No posts yet. Be the first to write one!</p>
+    }
+
+    return (
+        <div className="space-y-6">
+            <h1 className="text-3xl font-bold text-gray-800">Blog Feed</h1>
+            {posts.map(post => (
+                <Card key={post.id} className="cursor-pointer hover:shadow-lg transition-shadow">
+                    <div className="p-6" onClick={() => { setPage('post'); setCurrentPost(post); }}>
+                        <h2 className="text-2xl font-semibold text-gray-900 mb-2">{post.title}</h2>
+                        <p className="text-gray-500 text-sm mb-4">
+                            By {post.authorEmail || 'Anonymous'} on {post.createdAt ? new Date(post.createdAt.seconds * 1000).toLocaleDateString() : '...'}
+                        </p>
+                        <p className="text-gray-700 truncate">
+                            {post.content.substring(0, 150)}...
+                        </p>
+                    </div>
+                </Card>
+            ))}
+        </div>
+    );
+};
+
+const PostEditor = ({ db, auth, setPage, postToEdit }) => {
+    const [title, setTitle] = useState('');
+    const [content, setContent] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+
+    const isEditing = !!postToEdit;
+    const user = auth.currentUser;
+
+    useEffect(() => {
+        if (isEditing) {
+            setTitle(postToEdit.title);
+            setContent(postToEdit.content);
+        }
+    }, [isEditing, postToEdit]);
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!user) {
+            setError('You must be logged in to create or edit posts.');
+            return;
+        }
+        setLoading(true);
+        setError(null);
+
+        try {
+            if (isEditing) {
+                // Check if user is the author
+                if (postToEdit.authorId !== user.uid) {
+                    throw new Error("You don't have permission to edit this post.");
+                }
+                const postRef = doc(db, PATHS.post(postToEdit.id));
+                await updateDoc(postRef, {
+                    title,
+                    content,
+                });
+                setPage('post'); // Go back to the post
+            } else {
+                const newPost = {
+                    title,
+                    content,
+                    authorId: user.uid,
+                    authorEmail: user.email,
+                    createdAt: Timestamp.now(),
+                };
+                await addDoc(collection(db, PATHS.posts), newPost);
+                setPage('feed'); // Go back to the feed
+            }
+        } catch (err) {
+            setError(err.message);
+            console.error(err);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="max-w-3xl mx-auto">
+            <h1 className="text-3xl font-bold text-gray-800 mb-6">
+                {isEditing ? 'Edit Post' : 'Create New Post'}
+            </h1>
+            <form onSubmit={handleSubmit} className="space-y-6">
+                <Input
+                    type="text"
+                    placeholder="Post Title"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    required
+                />
+                <TextArea
+                    placeholder="Write your post content here..."
+                    value={content}
+                    onChange={(e) => setContent(e.target.value)}
+                    required
+                />
+                {error && <p className="text-red-500 text-sm">{error}</p>}
+                <div className="flex justify-end space-x-4">
+                    <Button variant="secondary" onClick={() => setPage(isEditing ? 'post' : 'feed')}>
+                        Cancel
+                    </Button>
+                    <Button type="submit" variant="primary" disabled={loading}>
+                        {loading ? <Spinner /> : (isEditing ? 'Save Changes' : 'Publish Post')}
+                    </Button>
+                </div>
+            </form>
+        </div>
+    );
+};
+
+const PostDetail = ({ post, db, auth, setPage, setCurrentPost }) => {
+    const [comments, setComments] = useState([]);
+    const [newComment, setNewComment] = useState('');
+    const [loadingComments, setLoadingComments] = useState(true);
+    const [postingComment, setPostingComment] = useState(false);
+    const [error, setError] = useState(null);
+
+    const user = auth.currentUser;
+
+    // Listen for real-time comment updates
+    useEffect(() => {
+        const commentsCol = collection(db, PATHS.comments(post.id));
+        const unsubscribe = onSnapshot(commentsCol, (snapshot) => {
+            const commentsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            // Sort comments by date in JS (client-side)
+            commentsData.sort((a, b) => a.createdAt.seconds - b.createdAt.seconds);
+            setComments(commentsData);
+            setLoadingComments(false);
+        }, (err) => {
+            console.error("Error fetching comments:", err);
+            setError("Could not load comments.");
+            setLoadingComments(false);
+        });
+
+        return () => unsubscribe();
+    }, [db, post.id]);
+
+    const handleCommentSubmit = async (e) => {
+        e.preventDefault();
+        if (!user) {
+            setError("You must be logged in to comment.");
+            return;
+        }
+        if (newComment.trim() === '') return;
+
+        setPostingComment(true);
+        setError(null);
+        try {
+            await addDoc(collection(db, PATHS.comments(post.id)), {
+                text: newComment,
+                authorId: user.uid,
+                authorEmail: user.email,
+                createdAt: Timestamp.now(),
+            });
+            setNewComment('');
+        } catch (err) {
+            setError("Failed to post comment.");
+            console.error(err);
+        } finally {
+            setPostingComment(false);
+        }
+    };
+
+    const handleDeletePost = async () => {
+        // A real app would use a custom modal, not window.confirm
+        if (window.prompt("This action cannot be undone. Type 'DELETE' to confirm.") === 'DELETE') {
+            try {
+                // In a real app, you'd delete comments in a cloud function
+                // For now, we just delete the post
+                await deleteDoc(doc(db, PATHS.post(post.id)));
+                setPage('feed');
+                setCurrentPost(null);
+            } catch (err) {
+                setError("Failed to delete post.");
+                console.error(err);
+            }
+        }
+    };
+
+    return (
+        <div className="max-w-3xl mx-auto">
+            <Card className="mb-6">
+                <div className="p-6 sm:p-8">
+                    <h1 className="text-4xl font-bold text-gray-900 mb-4">{post.title}</h1>
+                    <p className="text-gray-500 text-sm mb-6">
+                        By {post.authorEmail || 'Anonymous'} on {post.createdAt ? new Date(post.createdAt.seconds * 1000).toLocaleDateString() : '...'}
+                    </p>
+                    <div className="prose prose-lg max-w-none text-gray-800 whitespace-pre-wrap">
+                        {post.content}
+                    </div>
+                </div>
+                {user && user.uid === post.authorId && (
+                    <div className="bg-gray-50 p-4 flex justify-end space-x-4">
+                        <Button variant="secondary" onClick={() => { setPage('edit'); setCurrentPost(post); }}>
+                            <Edit size={18} /> <span className="ml-2">Edit</span>
+                        </Button>
+                        <Button variant="danger" onClick={handleDeletePost}>
+                            <Trash2 size={18} /> <span className="ml-2">Delete</span>
+                        </Button>
+                    </div>
+                )}
+            </Card>
+
+            <div className="mt-8">
+                <h2 className="text-2xl font-bold text-gray-800 mb-4">Comments</h2>
+                {user ? (
+                    <form onSubmit={handleCommentSubmit} className="flex space-x-4 mb-6">
+                        <Input
+                            type="text"
+                            placeholder="Write a comment..."
+                            value={newComment}
+                            onChange={(e) => setNewComment(e.target.value)}
+                            className="flex-grow"
+                        />
+                        <Button type="submit" variant="primary" disabled={postingComment}>
+                            <Send size={18} />
+                        </Button>
+                    </form>
+                ) : (
+                    <p className="text-gray-500 mb-6">You must be logged in to leave a comment.</p>
+                )}
+                {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
+                
+                {loadingComments ? <Spinner /> : (
+                    <div className="space-y-4">
+                        {comments.length === 0 && <p className="text-gray-500">No comments yet.</p>}
+                        {comments.map(comment => (
+                            <Card key={comment.id} className="p-4">
+                                <p className="text-gray-800">{comment.text}</p>
+                                <p className="text-gray-500 text-xs mt-2">
+                                    By {comment.authorEmail || 'Anonymous'} on {comment.createdAt ? new Date(comment.createdAt.seconds * 1000).toLocaleString() : '...'}
+                                </p>
+                            </Card>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
+
+// --- Main App Component ---
+
+export default function App() {
+    const [db, setDb] = useState(null);
+    const [auth, setAuth] = useState(null);
+    const [user, setUser] = useState(null);
+    const [loadingAuth, setLoadingAuth] = useState(true);
+
+    const [page, setPage] = useState('feed'); // 'auth', 'feed', 'post', 'create', 'edit'
+    const [posts, setPosts] = useState([]);
+    const [loadingPosts, setLoadingPosts] = useState(true);
+    const [currentPost, setCurrentPost] = useState(null); // The full post object
+
+    // Initialize Firebase and set up auth listener
+    useEffect(() => {
+        if (app) {
+            const dbInstance = getFirestore(app);
+            const authInstance = getAuth(app);
+            setDb(dbInstance);
+            setAuth(authInstance);
+            setLogLevel('debug'); // For debugging firestore
+
+            const unsubscribe = onAuthStateChanged(authInstance, (user) => {
+                setUser(user);
+                setLoadingAuth(false);
+                if (!user && page !== 'auth') {
+                    setPage('auth');
+                } else if (user && page === 'auth') {
+                    setPage('feed');
+                }
+            });
+
+            return () => unsubscribe();
+        } else {
+            console.error("Firebase app not initialized.");
+            setLoadingAuth(false);
+        }
+    }, []);
+
+    // Fetch all posts for the feed (real-time)
+    useEffect(() => {
+        if (!db) return;
+
+        setLoadingPosts(true);
+        const postsCol = collection(db, PATHS.posts);
+        const unsubscribe = onSnapshot(postsCol, (snapshot) => {
+            const postsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setPosts(postsData);
+            setLoadingPosts(false);
+        }, (err) => {
+            console.error("Error fetching posts:", err);
+            setLoadingPosts(false);
+        });
+
+        return () => unsubscribe();
+    }, [db]);
+
+    // Sort posts in a stable way
+    const sortedPosts = useMemo(() => {
+        return [...posts].sort((a, b) => {
+            const dateA = a.createdAt?.seconds || 0;
+            const dateB = b.createdAt?.seconds || 0;
+            return dateB - dateA; // Newest first
+        });
+    }, [posts]);
+    
+    // Update currentPost state if it's in the posts list and has changed
+    useEffect(() => {
+        if (page === 'post' && currentPost) {
+            const updatedPost = posts.find(p => p.id === currentPost.id);
+            if (updatedPost) {
+                setCurrentPost(updatedPost);
+            }
+        }
+    }, [posts, currentPost, page]);
+
+    const renderPage = () => {
+        if (loadingAuth || !auth) {
+            return <div className="pt-20"><Spinner /></div>;
+        }
+        if (!user) {
+            return <AuthPage auth={auth} />;
+        }
+
+        switch (page) {
+            case 'feed':
+                return <BlogFeed posts={sortedPosts} setPage={setPage} setCurrentPost={setCurrentPost} loading={loadingPosts} />;
+            case 'post':
+                if (!currentPost) return <p>Post not found.</p>;
+                return <PostDetail post={currentPost} db={db} auth={auth} setPage={setPage} setCurrentPost={setCurrentPost} />;
+            case 'create':
+                return <PostEditor db={db} auth={auth} setPage={setPage} />;
+            case 'edit':
+                if (!currentPost) return <p>Post not found.</p>;
+                return <PostEditor db={db} auth={auth} setPage={setPage} postToEdit={currentPost} />;
+            case 'auth':
+                return <AuthPage auth={auth} />; // Should be redirected, but as a fallback
+            default:
+                return <BlogFeed posts={sortedPosts} setPage={setPage} setCurrentPost={setCurrentPost} loading={loadingPosts} />;
+        }
+    };
+
+    return (
+        <div className="min-h-screen bg-gray-50 font-sans">
+            <Navbar user={user} auth={auth} setPage={setPage} setCurrentPost={setCurrentPost} />
+            <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-24">
+                {renderPage()}
+            </main>
+        </div>
+    );
+}
+
